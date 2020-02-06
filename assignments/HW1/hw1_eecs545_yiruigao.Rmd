@@ -1,0 +1,539 @@
+---
+title: "EECS 545 Homework 1"
+author: "Yirui Gao"
+date: "Jan 25"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: flatly
+    toc: yes
+csl: ecology.csl
+---
+
+\newcommand\prob{\mathbb{P}}
+
+```{r setup, include=FALSE}
+library(reticulate)
+use_python("c:\\users\\ADMINI~1\\appdata\\local\\programs\\python\\python37")
+```
+
+**<big>Question 1. Logsistic regression</big>** 
+
+***(a)*** 
+For logistic regression, we can derive the Hessian $H$ for the log-likelihood function by continuing the derivation in the lecture slide for the gradient of the log-likelihood. Since we know
+$$\begin{aligned}
+  \nabla_\textbf{w} \ell(\textbf{w}) &= \sum_{n = 1}^N (y^{(n)} - \sigma^{(n)})\phi(\textbf{x}^{(n)}),
+\end{aligned}$$
+where $\sigma^{(n)}$ is the sigmoid function with the weights $\textbf{w}$. Notice that the derivate for this sigmoid function is:
+$$ \sigma'(s) = \sigma(s)(1 - \sigma(s)).$$
+Therefore, the second derivative of the log-likelihood function can be found:
+$$\begin{aligned}
+  \nabla^2_\textbf{w} \ell(\textbf{w}) &= \sum_{n = 1}^N -\phi(\textbf{x}^{(n)})\sigma^{(n)}(1 - \sigma^{(n)})\phi(\textbf{x}^{(n)}) \\
+          &= -\sum_{n = 1}^N \textbf{x}^{(n)}\sigma^{(n)}(1 - \sigma^{(n)})\textbf{x}^{(n)\textbf{T}} \\
+          &= -\sum_{n = 1}^N \sigma^{(n)}(1 - \sigma^{(n)})\textbf{x}^{(n)}\textbf{x}^{(n)\textbf{T}}.
+\end{aligned}$$
+So the Hessian matrix for the log-likelihood function can be represented as:
+$$H = -\textbf{X}^Tdiag\ (\sigma^{(n)}(1 - \sigma^{(n)}))\textbf{X},$$
+where $diag(\sigma^{(n)}(1 - \sigma^{(n)}))$ is a $n\times n$ diagonal matrix with the value $\sigma^{(n)}(1 - \sigma^{(n)})$ falling at the n-th position on the diagonal line and other positions remain 0.
+
+Then, to show that Hessian of the log-likelihood function is negative semi-definite, we can show:
+$$\begin{aligned}
+  \textbf{z}^TH\textbf{z} &= -\textbf{z}^T\textbf{X}^Tdiag\ (\sigma^{(n)}(1 - \sigma^{(n)}))\textbf{X}\textbf{z} \\
+                        &= -(\textbf{X}\textbf{z})^Tdiag\ (\sigma^{(n)}(1 - \sigma^{(n)}))(\textbf{X}\textbf{z}) \\
+                        &= -\sum_{n = 1}^N\sigma^{(n)}(1 - \sigma^{(n)})(\textbf{x}^{(n)}\textbf{z})(\textbf{x}^{(n)}\textbf{z})^{\textbf{T}} \\
+                        &= -\sum_{n = 1}^N\sigma^{(n)}(1 - \sigma^{(n)})(\textbf{x}^{(n)}\textbf{z})^2,
+\end{aligned}$$
+since the squared term $(\textbf{x}^{(n)}\textbf{z})^2$ must be non-negative, and for the sigmoid function, we know that the derivative can never go below 0, so the overall sum of product must be non-negative, so plus the minus sign ahead, the overall term is non-positive, $\textbf{z}^TH\textbf{z} \leq 0$, so the Hessian is negative semi-definite.
+
+
+***(b)***
+First implement functions for calculating log-likelihoods and hessians:
+```{python}
+import numpy as np
+import math
+
+def sigmoid(X):
+    return 1/(1 + np.exp(-X))
+
+def log_likelihood(X, w, y):
+    epsilon = 1e-5  
+    p = sigmoid(X.dot(w))
+    return np.sum(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+def compute_gradient(X, w, y):
+    grad = -X.T.dot(y - sigmoid(X.dot(w)))
+    return grad
+
+def hessian(X, w, y):
+    m = sigmoid(X.dot(w))*(1-sigmoid(X.dot(w))).reshape(1, X.shape[0])
+    h = -X.T @ np.diag(np.diag(m)) @ X
+    return h
+    
+```
+
+The Newton's method is defined in this way:
+```{python}
+
+def newton(X, w, y, num_iter = 100):
+    print("***************Newton's method********************")
+    l = 0
+    l_new = 1
+    epsilon = 1e-10
+    i = 1
+    while abs(l - l_new) > epsilon and i <= num_iter:
+        l = l_new
+        grad = compute_gradient(X, w, y)
+        w = w + np.linalg.inv(hessian(X, w, y)).dot(grad)
+        l_new = log_likelihood(X, w, y)
+        print("This is Iteration {} and the log likelihood is {}".format(i, l_new))
+        i += 1
+    print("The final weight is {}".format(w))
+    return w
+
+X = np.load('data/q1x.npy')
+y = np.reshape(np.load('data/q1y.npy'), (X.shape[0], 1))
+N = X.shape[0]
+X = np.concatenate((np.ones((N, 1)), X), axis=1)
+w = np.zeros((X.shape[1], 1))
+w = newton(X, w, y)
+```
+According to the running result, we can see that the it converges when thenumber of iteration is 6, and gives the final result for \textbf{w} to be [-1.84922892, -0.62814188, 0.85846843].
+
+
+
+***(c)***
+Having the fitted coefficients derived from question (b), we can try to find a straight line as the decision boundary to separate regions for $h(\textbf{x}) > 0.5$ and $h(\textbf{x}) \leq 0.5$. We can see that when $h(\textbf{x}) = 0.5$, $\textbf{X}w = 0$. So I did the following job to generate the decision boudary:
+```{python}
+import matplotlib.pyplot as plt
+x1 = X[:,1]
+x2 = X[:,2]
+
+plt.figure(figsize=(10,6))
+plt.scatter(x1, x2, c = y[:,0])
+x_range = np.arange(min(x1), max(x1))
+plt.plot(x_range, -(w[0,] + w[1, ]*x_range)/w[2,], c = "red")
+plt.title("A linear decision boundary for Newton's method")
+plt.xlabel("x1")
+plt.ylabel("x2")
+plt.show()
+
+```
+
+
+
+
+ 
+**<big>Question 2. Linear regression on a polynomial</big>** 
+
+```{python}
+import time
+
+# Load the data:
+X_train = np.load('data/q2xTrain.npy')
+y_train = np.load('data/q2yTrain.npy')
+X_test = np.load('data/q2xTest.npy')
+y_test = np.load('data/q2yTest.npy')
+
+def construct_polynomial(X_vec, degree):
+    X = np.ones((X_vec.shape[0], 1))
+    for i in range(1, degree + 1):
+        X = np.append(X, np.reshape(X_vec**i, (X_vec.shape[0], 1)), axis=1)
+    return X
+```
+***(a)***
+\textbf{i}. For this question, I use Python's numpy and apply the optimization methods one by one:
+```{python}
+n = X_train.shape[0]
+X = construct_polynomial(X_train, 1)
+theta = np.zeros((2, 1))
+y = np.reshape(y_train, (n, 1))
+
+def cost_fuction(X, theta, y, lambda_ = 0):
+    regularization = 0.5 * lambda_ * (theta.T.dot(theta))
+    return 0.5 * np.sum((np.dot(X, theta) - y) ** 2) + np.asscalar(regularization)
+
+```
+
+```{python}
+def batchGD(X, theta, y, learning_rate = 0.001, num_iter = 10000):
+    print("***************Batch GD********************")
+    e = 0
+    e_new = 1
+    tolerance = 1e-10
+    i = 0
+    error_list = []
+    while abs(e - e_new) > tolerance and i <= num_iter:
+        i += 1
+        e = e_new
+        grad = np.dot(X.T, np.dot(X, theta) - y)
+        theta = theta - learning_rate * grad
+        e_new = cost_fuction(X, theta, y)
+        error_list.append(e_new)
+    print("It takes number of iteration # {} with final cost {}".format(i, e_new))
+    print("The final result for theta is ", theta)
+
+    return error_list
+    
+n = X_train.shape[0]    
+X = construct_polynomial(X_train, 1)
+theta = np.zeros((2, 1))
+y = np.reshape(y_train, (n, 1))
+
+batchGD(X, theta, y)
+```
+
+So for Batch gradient descent, it gives the coefficients for the weight $\textbf{w} = [1.94676992, -2.82392259]$ and the training takes 8495 number of iterations to come to a convergence.
+
+```{python}
+def SGD(X, theta, y, learning_rate = 0.001, num_iter = 10000):
+    print("***************Stochastic GD********************")
+    e = 0
+    e_new = 1
+    tolerance = 1e-10
+    j = 0
+    error_list = []
+    while abs(e - e_new) > tolerance and j <= num_iter:
+        j += 1
+        e = e_new
+        e_new = 0
+        for i in range(n):
+            X_i = X[i,:].reshape(1, X.shape[1])
+            y_i = y[i].reshape(1,1)
+            prediction_i = np.dot(X_i, theta)
+            grad = np.dot(X_i.T, prediction_i - y_i)
+            theta = theta - learning_rate * grad
+            e_new += cost_fuction(X_i, theta, y_i)
+        error_list.append(e_new)        
+    print("It takes number of iteration # {} with final cost {}".format(j, e_new))
+    print("The final result for theta is ", theta)
+    return error_list
+
+SGD(X, theta, y)
+```
+
+So for stochastic batch gradient descent, it gives the coefficients for the weight $\textbf{w} = [1.94634098, -2.82437173]$ and the training takes 8157 number of iterations to come to a convergence.
+
+```{python}
+def newton(X, theta, y, num_iter = 15):
+    print("***************Newton's method********************")
+    H = X.T.dot(X)
+    e = 0
+    e_new = 1
+    tolerance = 1e-10
+    i = 0
+    error_list = []
+    while abs(e - e_new) > tolerance and i <= num_iter:
+        i += 1
+        e = e_new
+        grad = np.dot(X.T, np.dot(X, theta) - y)
+        theta = theta -  np.linalg.inv(H).dot(grad)
+        e_new = cost_fuction(X, theta, y)
+        error_list.append(e_new)
+    print("It takes number of iteration # {} with final cost {}".format(i, e_new))
+    print("The final result for theta is ", theta)
+    return error_list, theta
+    
+newton(X, theta, y)
+
+```
+
+So for Newton's method, it gives the coefficients for the weight $\textbf{w} = [1.9468968, -2.82417908]$ and the training takes 2 number of iterations to come to a convergence.
+
+
+\textbf{ii}.
+Based on the knowledge of Newton's method, it converges to the optimal values for $\theta$ very fast, with only 2 iterations in my case (Ideally for linear regression it could converge in must one iteration, and the two here majorly is due to the precision of calculation), so it has a very high rate of convergence. As for the two gradient descent methods, we can compare the number of iterations they need to come to the convergence, where the batch GD takes 8495 iterations and SGD takes 8157 number of iterations, so we can say that the SGD is slightly faster than batch GD in the comparison of iteration numbers. But since SGD need to go over all the samples in one iteration, thus in this case, if we compare in time spent, batch GD has a higher rate of convergence than SGD.
+
+
+
+***(b)***
+
+\textbf{i}. 
+Seen in the following generated chart and the coding results for coefficients:
+```{python}
+
+X_test = np.load('data/q2xTest.npy')
+y_test = np.load('data/q2yTest.npy')
+ytest = np.reshape(y_test, (X_test.shape[0], 1))
+
+M = range(0, 10)
+ERMS_list = []
+ERMS_list_test = []
+
+for i in M:
+    X = construct_polynomial(X_train, i)
+    testX = construct_polynomial(X_test, i)
+    theta = np.zeros((i + 1, 1))
+    e, theta = newton(X, theta, y)
+    print("The theta for the {}-degree is: {}".format(i, theta))
+    e_test = cost_fuction(testX, theta, ytest)
+    
+    ERMS = np.sqrt(2 * e[-1] / X.shape[0])
+    ERMS_list.append(ERMS)
+
+    ERMS_test = np.sqrt(2 * e_test / testX.shape[0])
+    ERMS_list_test.append(ERMS_test)
+
+plt.figure(figsize=(10,6))
+train, = plt.plot(M, ERMS_list, '--o', color='blue', label='Training')
+test, = plt.plot(M, ERMS_list_test, '--o', color='red', label='Test')
+plt.legend(handles=[train, test])
+plt.xlabel("M")
+plt.ylabel("ERMS")
+plt.show()
+```
+
+\textbf{ii}.
+From the generated chart in (i), I would say the 5th degree polynomial best fits the data. There is no evident clue that the model experienced underfitting for any particular degree, but when $M = 9$, we can see that overfitting exists since the RMS error for the test data explodes at this degree.
+
+
+
+***(c)***
+\textbf{i}. 
+For this question, I redefine another Newton's method function with considering the effect of regularization:
+```{python}
+def newton_regularization(X, theta, y, lambda_, num_iter = 15):
+    print("***************Newton's method with regularization********************")
+    H = X.T.dot(X)
+    e = 0
+    e_new = 1
+    tolerance = 1e-10
+    i = 0
+    error_list = []
+    while abs(e - e_new) > tolerance and i <= num_iter:
+        i += 1
+        e = e_new
+        grad = np.dot(X.T, np.dot(X, theta) - y) + lambda_ * theta
+        theta = theta - np.linalg.inv(np.add(H, lambda_ * np.identity(X.shape[1]))).dot(grad)
+        e_new = cost_fuction(X, theta, y, lambda_)
+        error_list.append(e_new)
+    return error_list, theta
+```
+
+Different sets of lambda values are considered and plugged in to have a try, the result is shown in the following chart with the calculation of RMS errors:
+```{python}
+
+lambda_list = [0, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 1]
+M = 9
+
+ERMS_list = []
+ERMS_list_test = []
+
+X = construct_polynomial(X_train, M)
+testX = construct_polynomial(X_test, M)
+
+for l in lambda_list:
+    theta = np.zeros((M+1, 1))
+    e, theta = newton_regularization(X, theta, y, l)
+    print("The theta for the regularization with lambda equal to {} is: {}".format(l, theta))
+    e_test = cost_fuction(testX, theta, ytest, lambda_ = l)
+    
+    ERMS = np.sqrt(2 * e[-1] / X.shape[0])
+    ERMS_list.append(ERMS)
+
+    ERMS_test = np.sqrt(2 * e_test / testX.shape[0])
+    ERMS_list_test.append(ERMS_test)
+
+lambda_list[0] = 1e-9
+plt.figure(figsize=(10,6))
+train2, =  plt.plot(np.log10(lambda_list), ERMS_list, '--o', color='blue', label='Training')
+test2, = plt.plot(np.log10(lambda_list), ERMS_list_test, '--o', color='red', label='Test')
+plt.legend(handles=[train2, test2])
+plt.xlabel("log_10 of lambda")
+plt.ylabel("ERMS")
+plt.show() 
+
+```
+
+Notice that I use the log 10 of lambda to represent the values shown on the x axis, and because we know the log of 0 is negative infinity, so in order to show the RMS error when there's no regularization, I shift the point of negative infinity to the point of $log_{10}(e^{-9}) = -9$ on x axis, so we can see the trend better in the plot.
+
+\textbf{ii}.
+From the generated chart above, it seems that the $\lambda = 1e-5$ makes the best model in terms of error control.
+
+
+
+**<big>Question 3. Locally weighted linear regression</big>** 
+
+***(a)***
+For $E_D(w)$, the original expression can be transformed to:
+$$\begin{aligned}
+  E_D(w) &= \frac{1}{2}\sum_{i=1}^N(\textbf{w}^T\textbf{X}^{(i)} - y^{(i)})^2 \\
+        &= \frac{1}{2}\textbf{w}^T\textbf{X}^TR^{'}\textbf{X}\textbf{w} - \textbf{w}^T\textbf{X}^TR^{'}\textbf{y} + \frac{1}{2}\textbf{y}^TR^{'}\textbf{y} \\
+        &= \frac{1}{2}(\textbf{Xw} - \textbf{y})^TR^{'}(\textbf{Xw} - \textbf{y}) \\
+        &= (\textbf{Xw} - \textbf{y})^TR(\textbf{Xw} - \textbf{y}).
+\end{aligned}$$
+Here $R^{'}$ is a diagonal matrix with dimension (N,N) and $r^{(i)}$ falls on the diagonal line of this matrix. Therefore, $R$ is a diagonal matrix where for $R_{ii} = \frac{1}{2}r^{(i)}$ and zeros at non-diagonal positions.
+
+***(b)***
+Based on the previous conclusion, 
+$$\begin{aligned}
+  \nabla_\textbf{w} E_D(\textbf{w}) &= \nabla_\textbf{w}(\textbf{w}^T\textbf{X}^TR\textbf{X}\textbf{w} - 2\textbf{w}^T\textbf{X}^TR\textbf{y} + \textbf{y}^TR\textbf{y}) \\
+        &= 2\textbf{X}^TR\textbf{X}\textbf{w} - 2\textbf{X}^TR\textbf{y} \\ 
+        &= 0.
+\end{aligned}$$
+To solve this equation, we can easily get the normal equation for the new value of $\textbf{w}^*$ is then 
+$$\textbf{w}^* = (\textbf{X}^TR\textbf{X})^{-1}\textbf{X}^TR\textbf{y}.$$
+
+***(c)***
+By applying the maximum likelihood estimate of $\textbf{w}$, we need to derive the log likelihood:
+$$\begin{aligned}
+  \log p(y^{(1)},y^{(2)},...,y^{N}|\textbf{X},\textbf{w}) &= \log\prod_{i=1}^N(\frac{1}{\sqrt(2\pi)\sigma^{(i)}}\exp(-\frac{(y^{(i)} - \textbf{w}^T\textbf{X}^{(i)})^2}{2(\sigma^{(i)})^2})) \\
+  &= \sum_{i=1}^N(-\frac{1}{2}\log\ 2\pi - \log\sigma^{(i)} - \frac{(y^{(i)} - \textbf{w}^T\textbf{X}^{(i)})^2}{2(\sigma^{(i)})^2}) \\
+  &= -\frac{N}{2}\log2\pi - \sum_{i=1}^N\log\sigma^{(i)} - \sum_{i=1}^N\frac{(y^{(i)} - \textbf{w}^T\textbf{X}^{(i)})^2}{2(\sigma^{(i)})^2}),
+\end{aligned}$$
+and the goal is to let $\nabla_\textbf{w}\log p(y^{(1)},y^{(2)},...,y^{N}|\textbf{X},\textbf{w}) = 0,$ so we can derive: 
+$$\begin{aligned}
+  \nabla_\textbf{w}\log p(y^{(1)},y^{(2)},...,y^{N}|\textbf{X},\textbf{w}) &= -\sum_{i=1}^N\frac{1}{(\sigma^{(i)})^2}(y^{(i)} - \textbf{w}^T\textbf{X}^{(i)})\textbf{X}^{(i)} \\
+  &= 0.
+\end{aligned}$$
+We can find that if we replace $\frac{1}{(\sigma^{(i)})^2}$ with $r^{(i)}$ in the previous example, we can transform this equation to the same one that we solved for problem (b). Thus we can see that finding the maximum likelihood estimate of \textbf{w} reduces to solving a weighted linear regression problem. And the $r^{(i)}$ can be represented as $\frac{1}{(\sigma^{(i)})^2}$.
+
+***(d)***
+\textbf{i}. Using the normal equation $\textbf{w} = (\textbf{X}^T\textbf{X})^{-1}\textbf{X}^Ty$, apply the following python code and get the coefficients for \textbf{w} as $[0.49073707, 0.26333931]$:
+```{python}
+
+# Load the data:
+X = np.load('data/q3x.npy')
+y = np.load('data/q3y.npy')
+n = X.shape[0]
+X = np.append(np.ones((n, 1)), np.reshape(X, (n, 1)), axis = 1)
+# Use normal equation to get the result for the weight:
+theta = np.linalg.inv(np.dot(X.T, X)).dot(X.T).dot(y)
+print(theta)
+
+plt.figure(figsize=(6,3))
+plt.scatter(X[:,1], y, facecolors='none', edgecolors='blue')
+plt.plot(X[:,1], X.dot(theta), color='green')
+plt.xlabel("X")
+plt.ylabel("y")
+plt.show() 
+
+```
+
+\textbf{ii}. Generalize the Python code, we have:
+```{python}
+import math
+bandwidth = 0.8
+def LWLR(X, y, bandwidth):
+    # Choose each point between the minimum and the maximum as with step 0.1 as the center points
+    x_list = np.arange(min(X[:,1]), max(X[:,1]) + 1, 0.1)
+    prediction_list = []
+    for k in range(len(x_list)):
+        R = np.zeros((n, n))
+        for i in range(n):
+            center = x_list[k]
+            R[i,i] = math.exp(-(center - X[i,1])**2/(2*bandwidth**2))
+        # Calculate the theta matrix and then get the predictions:
+        theta = np.linalg.inv(X.T.dot(R).dot(X)).dot(X.T).dot(R).dot(y)
+        prediction_list.append(theta[0] + theta[1]*x_list[k])
+    plt.figure(figsize=(10,6))
+    plt.scatter(X[:,1], y, facecolors='none', edgecolors='blue')
+    plt.plot(x_list, prediction_list, color='green')
+    plt.title("This is the plot with bandwidth equaling to {}".format(bandwidth))
+    plt.xlabel("X")
+    plt.ylabel("y")
+    plt.show() 
+LWLR(X, y, 0.8) 
+
+```
+
+\textbf{iii}. Initialize a bandwidth lists, and apply the above Python function iteratively:
+```{python}
+bandwidth_list = [.1,.3,2,10]
+for i in bandwidth_list:
+    LWLR(X, y, i)
+```
+So, we can observe that when $\tau$ is too small, like 0.2 or 0.3, the model is obviously overfitting. And reversely, when when $\tau$ is too large, like 10, the model is underfitting.
+
+
+
+**<big>Question 4. Derivation and Proof</big>** 
+
+***(a)***
+
+Plug in $h(x) = w_1x + w_0$ into the formula of the mean squared error, we can get:
+$$\begin{aligned}
+L &= \frac{1}{2}\sum_{i=1}^N (y^{(i)} - h(x^{(i)}))^2 \\
+  &= \frac{1}{2}\sum_{i=1}^N [y^{(i)} - (w_1x^{(i)} + w_0)]^2 \\
+  &= \frac{1}{2}\sum_{i=1}^N [y^{(i)2} - 2y^{(i)}(w_1x^{(i)} + w_0) + (w_1x^{(i)} + w_0)^2]. \\
+\end{aligned}$$
+
+In order to get the minimum value for $L$, we can set $\frac{\partial L}{\partial w_0} = 0$ and $\frac{\partial L}{\partial w_1} = 0$, so we can have the following two relations:
+$$\begin{aligned}
+\frac{\partial L}{\partial w_0} &= \frac{1}{2}\sum_{i=1}^N [2(w_1x^{(i)} + w_0) - 2y^{(i)}] \\
+                              &= \sum_{i=1}^N [w_1x^{(i)} + w_0 - y^{(i)}] \\
+                              &= Nw_0 + w_1\sum_{i=1}^Nx^{(i)} - \sum_{i=1}^Ny^{(i)} \\
+                              &= N(w_0 + w_1\overline{X} - \overline{Y}) \\
+                              &= 0,
+\end{aligned}$$
+$$\begin{aligned}
+\frac{\partial L}{\partial w_1} &= \frac{1}{2}\sum_{i=1}^N [2x^{(i)}(w_1x^{(i)} + w_0) - 2x^{(i)}y^{(i)}] \\
+                              &= \sum_{i=1}^N [w_1x^{(i)2} + w_0x^{(i)} - x^{(i)}y^{(i)}] \\
+                              &= w_1\sum_{i=1}^Nx^{(i)2} + w_0\sum_{i=1}^Nx^{(i)} - \sum_{i=1}^Nx^{(i)}y^{(i)} \\
+                              &= w_1\sum_{i=1}^Nx^{(i)2} + Nw_0\overline{X} - \sum_{i=1}^Nx^{(i)}y^{(i)} \\
+                              &= 0.
+\end{aligned}$$
+So to simplify, we can have $w_0 = \overline{Y} - w_1\overline{X}$ and then we can plug this result into the other formula, and we get:
+$$\begin{aligned}
+ w_1 &= \frac{\sum_{i=1}^Nx^{(i)}y^{(i)} - Nw_0\overline{X}}{\sum_{i=1}^Nx^{(i)2}} \\
+    &= \frac{\sum_{i=1}^Nx^{(i)}y^{(i)} - N(\overline{Y} - w_1\overline{X})\overline{X}}{\sum_{i=1}^Nx^{(i)2}},
+\end{aligned}$$
+so $w_1$ can be simplified to $w_1 = \frac{\frac{1}{N}\sum_{i=1}^Nx^{(i)}y^{(i)} - \overline{X}\overline{Y}}{\frac{1}{N}\sum_{i=1}^Nx^{(i)2} - \overline{X}^2}$.
+
+
+
+***(b)***
+
+\textbf{i}. 
+
+First, prove $\Leftarrow$:
+
+since $\textbf{A}$ can be written in the spectral decomposition that $\textbf{A} = \textbf{U}\Lambda\textbf{U}^T$ with $\textbf{UU}^T = \textbf{U}^T\textbf{U} = \textbf{I}$ and $\Lambda = diag(\lambda_1, \lambda_2, ..., \lambda_d)$. Here in order to show that $\textbf{A}$ is PD given all the $\lambda$s are positive, we can expand in this way:
+$$\begin{aligned}
+  \textbf{z}^T\textbf{A}\textbf{z} &= \textbf{z}^T\textbf{U}\Lambda\textbf{U}^T\textbf{z} \\
+                                  &= (\textbf{U}^T\textbf{z})^T\Lambda(\textbf{U}^T\textbf{z}).
+\end{aligned}$$
+Now, we can let $\textbf{y} = \textbf{U}^T\textbf{z}$, and represent the original equation with its quadratic form, we can see:
+$$\begin{aligned}
+  \textbf{z}^T\textbf{A}\textbf{z} &= \textbf{y}^T\Lambda\textbf{y} \\
+                                  &= \lambda_1y_1^2 + \lambda_2y_2^2 + ... + \lambda_dy_d^2.
+\end{aligned}$$
+Therefore, given that all the $\lambda$s are positive, the sum of the product with a sqaured term must be postive, if we know $\textbf{z} \neq \textbf{0}$, we can see that $\textbf{y} \neq \textbf{0}$. 
+
+Therefore we can prove the direction of $\textbf{A}$ is PD if $\lambda_i > 0$ for each $i$.
+
+Next, prove $\Rightarrow$:
+
+given that $\textbf{A}$ is PD, we can expand that $\textbf{z}^T\textbf{U}\Lambda\textbf{U}^T\textbf{z} > 0$ for all $\textbf{z} \neq \textbf{0}$. Similarly, we can let $\textbf{y} = \textbf{U}^T\textbf{z}$ again, so that we can know that $\textbf{y}^T\Lambda\textbf{y} > 0$ is true, and again, quadratic form of this can be written:
+$$\begin{aligned}
+  \textbf{y}^T\Lambda\textbf{y} &= \lambda_1y_1^2 + \lambda_2y_2^2 + ... + \lambda_dy_d^2,
+\end{aligned}$$
+the only way to make this equation positive given any $\textbf{z}$ that can lead to different $\textbf{y}$ is to make every $\lambda$ positive, so we can finish this direction of proof.
+
+
+\textbf{ii}.
+
+For normal linear regression, as we can see the solution for coefficient $theta$ is $(\Phi^T\Phi)^{-1}\Phi^T\textbf{y}$, and for ridge regression, the solution is the addition of a regularization term, thus it is $(\Phi^T\Phi + \beta\textbf{I})^{-1}\Phi^T\textbf{y}$. So the symmetric matrix for the two different regressions are $\Phi^T\Phi$ and $\Phi^T\Phi + \beta\textbf{I}$ correspondingly.  
+
+Now use the spectral decomposition to decompose these two symmetric matrices, we can suppose that 
+$$ \Phi^T\Phi = \textbf{U}\Lambda\textbf{U}^T,$$
+where the eigenvalues, as mentioned in the statement of this problem, are diagonal elements on the $\Lambda$ matrix. So we can plug this equation into $\Phi^T\Phi + \beta\textbf{I}$, and utilizing the property that $\textbf{U}\textbf{U}^T = \textbf{U}^T\textbf{U} = \textbf{I}$, we can further simplify:
+$$\begin{aligned}
+  \Phi^T\Phi + \beta\textbf{I} &= \textbf{U}\Lambda\textbf{U}^T + \beta\textbf{I} \\
+                              &= \textbf{U}\Lambda\textbf{U}^T + \textbf{U}\beta\textbf{I}\textbf{U}^T \\
+                              &= \textbf{U}(\Lambda + \beta\textbf{I})\textbf{U}^T,
+\end{aligned}$$
+therefore, we can easily see that for the ridge regression, the eigenvalues for the symmetric matrix $\Phi^T\Phi + \beta\textbf{I}$, are the diagonal elements that are equal to $\lambda_i + \beta$ at the i-th position on the diagonal line. Here according to SVD method, we can see that the eigenvalues are equal to the singualr values, thus we can draw the conclusion that the ridge regression has an effect of shifting all singular values by a $\beta$.
+
+Similar with the last problem, to solve that the matrix $\Phi^T\Phi + \beta\textbf{I}$ is PD for any $\beta > 0$, we again use the quadratic form, again let $\textbf{y} = \textbf{U}^T\textbf{z}$:
+$$ \textbf{z}^T(\Phi^T\Phi + \beta\textbf{I})\textbf{z} = (\lambda_1 + \beta)y_1^2 + (\lambda_2 + \beta)y_2^2 + ... + (\lambda_d + \beta)y_d^2.$$
+To prove that this formula is always positive, we need to first take a consideration to $\Phi^T\Phi$, show it is PSD:
+$$ \textbf{z}^T(\Phi^T\Phi)\textbf{z} = (\Phi \textbf{z})^T(\Phi \textbf{z}) = ||\Phi \textbf{z}||_2^2 \geq 0.$$
+Since for any $\textbf{z}$, the above equation holds, so the eigenvalues for $\Phi^T\Phi$ should always be non-negative, therefore, go back to $\Phi^T\Phi + \beta\textbf{I}$ with the eigenvalue to be $\lambda_i + \beta$, if $\beta > 0$,  $\lambda_i + \beta$ must be absolutely positive, thus $\Phi^T\Phi + \beta\textbf{I}$ must absolutely be PD.
+
+
+**<big>Collaboration</big>** 
+For this homework, I formed all the solutions my own but discussed the problem sets together with people in my assignment group, they are Junwei Deng, Dongjian Chen and Yunzhe Jiang.
+
+
+
